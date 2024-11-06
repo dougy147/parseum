@@ -65,12 +65,14 @@ let rec str (s: string): string parser =
 let prefix = str
 
 let ( *> ) (p: 'a parser) (q: 'b parser): 'b parser =
+    (* ignore left parser parsed input *)
     function (inp: input) ->
         match p inp with
         | [] -> []
         | (_, inp') :: _ -> q inp'
 
 let ( <* ) (p: 'a parser) (q: 'b parser): 'a parser =
+    (* ignore right parser parsed input *)
     function (inp: input) ->
         match p inp with
         | [] -> []
@@ -78,6 +80,16 @@ let ( <* ) (p: 'a parser) (q: 'b parser): 'a parser =
                 match q inp' with
                 | [] -> []
                 | (_, inp'') :: _ -> [(x, inp'')]
+
+let ( <*> ) (p: 'a parser) (q: 'b parser): ('a * 'b) parser =
+    (* ignore right parser parsed input *)
+    function (inp: input) ->
+        match p inp with
+        | [] -> []
+        | (x, inp') :: _ ->
+                match q inp' with
+                | [] -> []
+                | (y, inp'') :: _ -> [((x,y), inp'')]
 
 (* [""] is the monad comprehension syntax for: result "" *)
 (*
@@ -93,3 +105,19 @@ let many (p: 'a parser): 'a list parser =
     newElem ++ result []
   in
   m ()
+
+let rec many1 (p: 'a parser): 'a list parser =
+    p <-> fun x ->
+        many p <-> fun xs ->
+            result (x :: xs)
+
+(*
+ * let nat: int parser =
+ *     let eval (xs: string list): int =
+ *         List.fold_left (fun acc x -> acc ^ x) "" xs
+ *         |> int_of_string
+ *     in
+ *     many digit <-> fun xs ->
+ *         result (eval xs)
+ *)
+
