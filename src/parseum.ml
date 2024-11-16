@@ -1,123 +1,141 @@
 type input = string
 type 'a parser = input -> ('a * input) list
 
-let result (value: 'a): 'a parser =
-  function (inp: input) -> [(value , inp)]
+(*primitive parsers*)
 
-let zero: 'a parser =
-  function (inp: input) -> []
+let result (value: 'a) = function inp -> [(value, inp)]
+let fail = function inp -> []
+let item =
+    function inp ->
+        match inp with
+        | "" -> []
+        | _ -> let x  = String.sub inp 0 1 in
+               let xs = String.sub inp 1 (String.length inp - 1) in
+               [(x, xs)]
 
-let item: string parser =
-  function (inp: input) ->
-    match inp with
-    | "" -> []
-    | _ ->
-        let l = String.length inp in
-        [(String.sub inp 0 1, String.sub inp 1 (l - 1))]
-
+(*sequencing parsers*)
 let bind (p: 'a parser) (f: 'a -> 'b parser): 'b parser =
-  function (inp: input) ->
-    List.map (fun (v, inp') -> f v inp') (p inp)
-    |> List.flatten
+    function inp ->
+        p inp
+        |> List.map (fun (v,inp') -> f v inp')
+        |> List.flatten
 
-let ( <-> ) = bind
+let ( <+> ) = bind
 
-let sat (p: string -> bool): string parser =
-  item <-> fun x ->
-    if p x then result x
-    else zero
+let sat (check: string -> bool): string parser =
+    item <+> (fun x -> if check x then result x else fail)
 
-let char (x: string): string parser = sat (fun y -> x = y)
+let char (x: string): string parser =
+    sat (fun y -> x = y)
+
 let digit: string parser = sat (fun x -> "0" <= x && x <= "9")
 let lower: string parser = sat (fun x -> "a" <= x && x <= "z")
 let upper: string parser = sat (fun x -> "A" <= x && x <= "Z")
 
-let plus (p: 'a parser) (q: 'a parser): 'a parser =
-  function (inp: input) -> p inp @ q inp
+let alter (p: 'a parser) (q: 'a parser): 'a parser = (*this is originally called "plus" in the paper*)
+    function inp -> p inp @ q inp
+let ( <|> ) = alter
 
-let ( ++ ) = plus
-
-let letter: string parser = lower ++ upper
-let alnum: string parser = lower ++ digit ++ upper
+let letter: string parser = lower  <|> upper
+let alnum : string parser = letter <|> digit
 
 let word: string parser =
-  let rec w () =
-    let neWord = letter <-> fun x ->
-                 w () <-> fun xs ->
-                   result (x ^ xs)
+    let rec w () =
+        let new_word =
+            letter <+> fun x ->
+                w () <+> fun xs ->
+                    result (x ^ xs)
+        in
+        new_word <|> result ""
     in
-    neWord ++ result ""
-  in
-  w ()
+    w ()
 
-(*p.13*)
-(* I still don't understand monad notation *)
-(*str (x:xs) = [x:xs | _ <- char x, _ <- str xs] *)
+let many (p: 'a parser): 'a parser =
+    let rec m () =
+        let many_p =
+            p <+> fun x ->
+                m () <+> fun xs ->
+                    result (x ^ xs)
+        in
+        many_p <|> result ""
+    in
+    m ()
+
+let ident: string parser =
+    lower <+> fun x ->
+        many alnum <+> fun xs ->
+            result (x ^ xs)
+
+let many1 (p: 'a parser): 'a parser =
+    p <+> fun x ->
+        many p <+> fun xs ->
+            result (x ^ xs)
+
+let nat: int parser =
+    many1 digit <+> fun xs ->
+        result (int_of_string xs)
+
 let rec str (s: string): string parser =
     match s with
     | "" -> result ""
     | _ -> let x  = String.sub s 0 1 in
            let xs = String.sub s 1 (String.length s - 1) in
-           char x <-> fun _ ->
-           str xs <-> fun _ ->
-               result (x ^ xs)
+           char x <+> fun _ ->
+               str xs <+> fun _ ->
+                   result (x ^ xs)
 
-let prefix = str
+(* monad signature *)
+(*with the help of: https://cs3110.github.io/textbook/chapters/ds/monads.html*)
+module type Monad = sig
+    type 'a m
+    val result : 'a -> 'a m
+    val bind : 'a m -> ('a -> 'b m) -> 'b m
+end
 
-let ( *> ) (p: 'a parser) (q: 'b parser): 'b parser =
-    (* ignore left parser parsed input *)
-    function (inp: input) ->
+(*example for the instance Monad Parser*)
+(*with the help of: https://discuss.ocaml.org/t/maybe-monad-in-ocaml/10221*)
+module Monad_Parser: Monad = struct
+    type 'a m = 'a parser
+    let result v = function input -> [(v, input)]
+    let bind p f =
+        function inp ->
+            p inp
+            |> List.map (fun (v,inp') -> f v inp')
+            |> List.flatten
+end
+
+(*outside of paper*)
+let ignore_right_parser (p: 'a parser) (q: 'b parser): 'a parser =
+    function inp ->
+        let p_res = p inp in
+        match p_res with
+        | [] -> []
+        | _ -> p_res
+                |> List.map
+                    (fun (v,inp') ->
+                            let q_res = q inp' in
+                            match q_res with
+                            | [] -> []
+                            | _  -> q_res
+                                    |> List.map (fun (v',inp'') -> (v,inp''))
+                    )
+                |> List.flatten
+
+let ignore_left_parser (p: 'a parser) (q: 'b parser): 'b parser =
+    function inp ->
+        let p_res = p inp in
+        match p_res with
+        | [] -> []
+        | _ -> p_res
+                   |> List.map (fun (_,inp') -> q inp')
+                   |> List.flatten
+
+let ( +> ) = ignore_left_parser
+let ( <+ ) = ignore_right_parser
+
+(* wrap over a parser to extract top result only *)
+let top_result (p: 'a parser) =
+    function inp ->
         match p inp with
         | [] -> []
-        | (_, inp') :: _ -> q inp'
-
-let ( <* ) (p: 'a parser) (q: 'b parser): 'a parser =
-    (* ignore right parser parsed input *)
-    function (inp: input) ->
-        match p inp with
-        | [] -> []
-        | (x, inp') :: _ ->
-                match q inp' with
-                | [] -> []
-                | (_, inp'') :: _ -> [(x, inp'')]
-
-let ( <*> ) (p: 'a parser) (q: 'b parser): ('a * 'b) parser =
-    (* ignore right parser parsed input *)
-    function (inp: input) ->
-        match p inp with
-        | [] -> []
-        | (x, inp') :: _ ->
-                match q inp' with
-                | [] -> []
-                | (y, inp'') :: _ -> [((x,y), inp'')]
-
-(* [""] is the monad comprehension syntax for: result "" *)
-(*
-many :: Parser a -> Parser [a]
-many p = [x:xs | x <- p, xs <- many p] ++ [[]]
-*)
-let many (p: 'a parser): 'a list parser =
-  let rec m () =
-    let newElem = p <-> fun x ->
-                 m () <-> fun xs ->
-                   result (x :: xs)
-    in
-    newElem ++ result []
-  in
-  m ()
-
-let rec many1 (p: 'a parser): 'a list parser =
-    p <-> fun x ->
-        many p <-> fun xs ->
-            result (x :: xs)
-
-(*
- * let nat: int parser =
- *     let eval (xs: string list): int =
- *         List.fold_left (fun acc x -> acc ^ x) "" xs
- *         |> int_of_string
- *     in
- *     many digit <-> fun xs ->
- *         result (eval xs)
- *)
-
+        | (x, inp') :: _ -> [(x,inp')]
