@@ -50,14 +50,27 @@ let word: string parser =
     in
     w ()
 
+
 let many (p: 'a parser): 'a parser =
+   let rec m () =
+       let many_p =
+           p <+> fun x ->
+               m () <+> fun xs ->
+                   result (x ^ xs)
+       in
+       many_p <|> result ""
+   in
+   m ()
+
+
+let many_list (p: 'a parser): 'a list parser =
     let rec m () =
         let many_p =
             p <+> fun x ->
                 m () <+> fun xs ->
-                    result (x ^ xs)
+                    result (x :: xs)
         in
-        many_p <|> result ""
+        many_p <|> result []
     in
     m ()
 
@@ -70,6 +83,11 @@ let many1 (p: 'a parser): 'a parser =
     p <+> fun x ->
         many p <+> fun xs ->
             result (x ^ xs)
+
+let many1_list (p: 'a parser): 'a list parser =
+    p <+> fun x ->
+        many_list p <+> fun xs ->
+            result (x :: xs)
 
 let nat: int parser =
     many1 digit <+> fun xs ->
@@ -139,3 +157,9 @@ let top_result (p: 'a parser) =
         match p inp with
         | [] -> []
         | (x, inp') :: _ -> [(x,inp')]
+
+let optional (p: 'a parser): 'a parser =
+    function inp ->
+        match p inp with
+        | [] -> result "" inp
+        | (v, inp') :: _  -> result v inp'
